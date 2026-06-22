@@ -1,14 +1,16 @@
-const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, ipcMain, globalShortcut } = require('electron')
+const { app, BrowserWindow, Tray, clipboard, nativeImage, ipcMain, globalShortcut } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const Database = require('better-sqlite3')
+const initSqlJs = require('sql.js')
 
 // ======================== Globals ========================
 let tray = null
 let mainWindow = null
 let db = null
+let dbPath = ''
 let clipboardMonitor = null
 let lastClipboardText = ''
+let lastClipboardImageSize = 0
 let imageDir = ''
 
 // ======================== App Paths ========================
@@ -29,13 +31,58 @@ function isDev() {
 }
 
 // ======================== Database ========================
-function initDatabase() {
-  const dbPath = path.join(app.getPath('userData'), 'clipboard.db')
-  db = new Database(dbPath)
 
-  db.pragma('journal_mode = WAL')
+/** 将 sql.js 查询结果转为对象数组（类似 better-sqlite3 的 .all()） */
+function queryAll(sql, params = []) {
+  const stmt = db.prepare(sql)
+  if (params.length > 0) stmt.bind(params)
+  const results = []
+  while (stmt.step()) {
+    results.push(stmt.getAsObject())
+  }
+  stmt.free()
+  return results
+}
 
-  db.exec(`
+/** 查询单条记录 */
+function queryOne(sql, params = []) {
+  const results = queryAll(sql, params)
+  return results.length > 0 ? results[0] : null
+}
+
+/** 执行写操作并自动保存到磁盘 */
+function execute(sql, params = []) {
+  db.run(sql, params)
+  saveDatabase()
+}
+
+/** 将内存中的数据库数据写入磁盘文件 */
+function saveDatabase() {
+  try {
+    const data = db.export()
+    const buffer = Buffer.from(data)
+    fs.writeFileSync(dbPath, buffer)
+  } catch (e) {
+    console.error('Failed to save database:', e)
+  }
+}
+
+/** 初始化数据库（异步） */
+async function initDatabase() {
+  const SQL = await initSqlJs()
+  dbPath = path.join(app.getPath('userData'), 'clipboard.db')
+
+  // 如果已有数据库文件则加载，否则创建新的
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath)
+    db = new SQL.Database(fileBuffer)
+  } else {
+    db = new SQL.Database()
+  }
+
+  db.run('PRAGMA journal_mode = WAL')
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS clipboard_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL,
@@ -47,56 +94,56 @@ function initDatabase() {
     )
   `)
 
-  db.exec(`
+  db.run(`
     CREATE INDEX IF NOT EXISTS idx_created_at
     ON clipboard_history(created_at DESC)
   `)
+
+  saveDatabase()
 }
 
 function addToHistory(type, content, imagePath, preview) {
-  const stmt = db.prepare(
-    'INSERT INTO clipboard_history (type, content, image_path, preview) VALUES (?, ?, ?, ?)'
+  execute(
+    'INSERT INTO clipboard_history (type, content, image_path, preview) VALUES (?, ?, ?, ?)',
+    [type, content, imagePath, preview]
   )
-  const result = stmt.run(type, content, imagePath, preview)
 
   // 保留最近 500 条记录
-  const countStmt = db.prepare('SELECT COUNT(*) as count FROM clipboard_history')
-  const { count } = countStmt.get()
-  if (count > 500) {
-    db.prepare(
+  const row = queryOne('SELECT COUNT(*) as count FROM clipboard_history')
+  if (row && row.count > 500) {
+    execute(
       'DELETE FROM clipboard_history WHERE id NOT IN (SELECT id FROM clipboard_history ORDER BY created_at DESC LIMIT 500)'
-    ).run()
+    )
   }
-
-  return result.lastInsertRowid
 }
 
 function getHistory(limit = 100) {
-  return db.prepare(
-    'SELECT * FROM clipboard_history ORDER BY pinned DESC, created_at DESC LIMIT ?'
-  ).all(limit)
+  return queryAll(
+    'SELECT * FROM clipboard_history ORDER BY pinned DESC, created_at DESC LIMIT ?',
+    [limit]
+  )
 }
 
 function deleteItem(id) {
-  const item = db.prepare('SELECT * FROM clipboard_history WHERE id = ?').get(id)
+  const item = queryOne('SELECT * FROM clipboard_history WHERE id = ?', [id])
   if (item && item.image_path) {
     try { fs.unlinkSync(item.image_path) } catch (e) { /* ignore */ }
   }
-  return db.prepare('DELETE FROM clipboard_history WHERE id = ?').run(id)
+  execute('DELETE FROM clipboard_history WHERE id = ?', [id])
 }
 
 function clearHistory() {
-  const items = db.prepare('SELECT image_path FROM clipboard_history WHERE image_path IS NOT NULL').all()
+  const items = queryAll('SELECT image_path FROM clipboard_history WHERE image_path IS NOT NULL')
   for (const item of items) {
     try { fs.unlinkSync(item.image_path) } catch (e) { /* ignore */ }
   }
-  return db.prepare('DELETE FROM clipboard_history').run()
+  execute('DELETE FROM clipboard_history')
 }
 
 function togglePin(id) {
-  const item = db.prepare('SELECT pinned FROM clipboard_history WHERE id = ?').get(id)
+  const item = queryOne('SELECT pinned FROM clipboard_history WHERE id = ?', [id])
   if (item) {
-    db.prepare('UPDATE clipboard_history SET pinned = ? WHERE id = ?').run(item.pinned ? 0 : 1, id)
+    execute('UPDATE clipboard_history SET pinned = ? WHERE id = ?', [item.pinned ? 0 : 1, id])
   }
 }
 
@@ -110,7 +157,7 @@ function startClipboardMonitor() {
         lastClipboardText = currentText
 
         // 去重：如果最近一条内容相同则跳过
-        const latest = db.prepare('SELECT * FROM clipboard_history ORDER BY created_at DESC LIMIT 1').get()
+        const latest = queryOne('SELECT * FROM clipboard_history ORDER BY created_at DESC LIMIT 1')
         if (latest && latest.type === 'text' && latest.content === currentText) return
 
         const preview = currentText.substring(0, 200)
@@ -120,19 +167,16 @@ function startClipboardMonitor() {
         }
       }
 
-      // 检查图片（仅在文本无变化时检查，避免重复）
+      // 检查图片
       const image = clipboard.readImage()
       if (!image.isEmpty()) {
         const imgBuffer = image.toPNG()
-        const imgHash = `${imgBuffer.length}_${Date.now()}`
 
-        // 简单去重
-        const latestImg = db.prepare(
-          'SELECT * FROM clipboard_history WHERE type = "image" ORDER BY created_at DESC LIMIT 1'
-        ).get()
-        if (latestImg && Date.now() - new Date(latestImg.created_at).getTime() < 2000) return
+        // 通过图片大小去重：同一张图片在剪贴板中大小不变
+        if (imgBuffer.length === lastClipboardImageSize) return
+        lastClipboardImageSize = imgBuffer.length
 
-        const imgFilename = `clip_${Date.now()}_${imgHash.substring(0, 16)}.png`
+        const imgFilename = `clip_${Date.now()}.png`
         const imgPath = path.join(imageDir, imgFilename)
         fs.writeFileSync(imgPath, imgBuffer)
 
@@ -149,17 +193,15 @@ function startClipboardMonitor() {
 
 // ======================== Tray ========================
 function createTrayIcon() {
-  // 创建一个简单的 SVG 图标并转为 PNG
-  const svgIcon = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
-         fill="none" stroke="#666666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-      <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-      <line x1="9" y1="12" x2="15" y2="12"/>
-      <line x1="9" y1="16" x2="15" y2="16"/>
-    </svg>
-  `
-  const icon = nativeImage.createFromBuffer(Buffer.from(svgIcon))
+  const iconPath = path.join(app.getPath('userData'), 'tray-icon.png')
+
+  // 如果图标文件不存在，则生成一个
+  if (!fs.existsSync(iconPath)) {
+    const { createClipboardIconPNG } = require('./generate-icon')
+    fs.writeFileSync(iconPath, createClipboardIconPNG())
+  }
+
+  const icon = nativeImage.createFromPath(iconPath)
   if (process.platform === 'darwin') {
     icon.setTemplateImage(true)
   }
@@ -171,33 +213,7 @@ function createTray() {
   tray = new Tray(icon)
   tray.setToolTip('剪贴板管理器')
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '打开剪贴板历史',
-      click: () => toggleWindow()
-    },
-    { type: 'separator' },
-    {
-      label: '清空历史',
-      click: () => {
-        clearHistory()
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('clipboard-changed')
-        }
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '退出',
-      click: () => {
-        app.quit()
-      }
-    }
-  ])
-  tray.setContextMenu(contextMenu)
-
   tray.on('click', () => toggleWindow())
-  tray.on('right-click', () => tray.popUpContextMenu())
 }
 
 // ======================== Window ========================
@@ -308,7 +324,8 @@ function setupIPC() {
         console.error('Failed to copy image:', e)
       }
     }
-    // 复制到剪贴板后隐藏窗口
+    // 等待视觉反馈显示后再隐藏窗口
+    await new Promise(resolve => setTimeout(resolve, 500))
     if (mainWindow && mainWindow.isVisible()) {
       mainWindow.hide()
     }
@@ -323,17 +340,21 @@ function setupIPC() {
       return null
     }
   })
+
+  ipcMain.handle('quit-app', async () => {
+    app.quit()
+  })
 }
 
 // ======================== App Lifecycle ========================
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // 初始化图片存储目录
   imageDir = path.join(app.getPath('userData'), 'clipboard_images')
   if (!fs.existsSync(imageDir)) {
     fs.mkdirSync(imageDir, { recursive: true })
   }
 
-  initDatabase()
+  await initDatabase()
   setupIPC()
   createWindow()
   createTray()
@@ -349,6 +370,10 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   if (clipboardMonitor) clearInterval(clipboardMonitor)
   globalShortcut.unregisterAll()
+  if (db) {
+    saveDatabase()
+    db.close()
+  }
 })
 
 app.on('window-all-closed', (e) => {

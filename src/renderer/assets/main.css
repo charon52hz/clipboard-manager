@@ -144,6 +144,16 @@ html, body {
   color: var(--danger);
 }
 
+.header-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-icon.quit-btn:hover {
+  background: rgba(124, 111, 247, 0.12);
+  color: var(--accent-light);
+}
+
 /* ======================== History List ======================== */
 .history-list {
   flex: 1;
@@ -195,6 +205,12 @@ html, body {
 .clipboard-item.pinned {
   background: var(--accent-bg);
   border-color: rgba(124, 111, 247, 0.2);
+}
+
+.clipboard-item.copied {
+  background: rgba(76, 206, 138, 0.18);
+  border-color: rgba(76, 206, 138, 0.4);
+  transition: all 0.1s;
 }
 
 /* Indicator */
@@ -285,6 +301,12 @@ html, body {
 .char-count {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.copied-hint {
+  font-size: 11px;
+  color: var(--success);
+  font-weight: 600;
 }
 
 /* Actions */

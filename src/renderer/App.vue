@@ -19,13 +19,21 @@
       </div>
       <div class="header-actions">
         <span class="item-count">{{ items.length }} 条记录</span>
-        <button class="btn-icon" title="清空历史" @click="handleClear">
-          <svg viewBox="0 0 24 24" width="14" height="14">
-            <polyline points="3,6 5,6 21,6" fill="none" stroke="currentColor" stroke-width="2"/>
-            <path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2V6"
-                  fill="none" stroke="currentColor" stroke-width="2"/>
-          </svg>
-        </button>
+        <div class="header-btns">
+          <button class="btn-icon" title="清空历史" @click="handleClear">
+            <svg viewBox="0 0 24 24" width="14" height="14">
+              <polyline points="3,6 5,6 21,6" fill="none" stroke="currentColor" stroke-width="2"/>
+              <path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2V6"
+                    fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </button>
+          <button class="btn-icon quit-btn" title="退出应用" @click="handleQuit">
+            <svg viewBox="0 0 24 24" width="14" height="14">
+              <path d="M18.36 6.64A9 9 0 1 1 5.64 6.64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -114,6 +122,10 @@ export default {
       }
     }
 
+    function handleQuit() {
+      window.clipboardAPI.quitApp()
+    }
+
     onMounted(() => {
       loadHistory()
       changeHandler = () => loadHistory()
@@ -135,7 +147,8 @@ export default {
       handleCopy,
       handleDelete,
       handlePin,
-      handleClear
+      handleClear,
+      handleQuit
     }
   }
 }

@@ -27,5 +27,8 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   /** 移除剪贴板变化监听 */
   removeChangedListener: (callback) => {
     ipcRenderer.removeListener('clipboard-changed', callback)
-  }
+  },
+
+  /** 退出应用 */
+  quitApp: () => ipcRenderer.invoke('quit-app')
 })

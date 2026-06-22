@@ -1,13 +1,13 @@
 <template>
   <div
     class="clipboard-item"
-    :class="{ pinned: item.pinned }"
+    :class="{ pinned: item.pinned, copied: justCopied }"
     @click="handleCopy"
     :title="item.type === 'text' ? '点击复制到剪贴板' : '点击图片复制到剪贴板'"
   >
     <div class="item-indicator">
       <span class="type-badge" :class="item.type">
-        {{ item.type === 'text' ? '文' : '图' }}
+        {{ justCopied ? '✓' : (item.type === 'text' ? '文' : '图') }}
       </span>
       <span v-if="item.pinned" class="pin-badge">📌</span>
     </div>
@@ -29,6 +29,7 @@
         <span v-if="item.type === 'text'" class="char-count">
           {{ (item.content || '').length }} 字符
         </span>
+        <span v-if="justCopied" class="copied-hint">已复制</span>
       </div>
     </div>
 
@@ -60,6 +61,7 @@ export default {
   emits: ['copy', 'delete', 'pin'],
   setup(props, { emit }) {
     const imageSrc = ref(null)
+    const justCopied = ref(false)
 
     const displayText = computed(() => {
       const text = props.item.content || ''
@@ -72,8 +74,24 @@ export default {
       }
     }
 
-    function handleCopy() {
-      emit('copy', props.item)
+    async function handleCopy() {
+      const plainItem = JSON.parse(JSON.stringify(props.item))
+
+      // 立即显示视觉反馈
+      justCopied.value = true
+
+      try {
+        await window.clipboardAPI.copyItem(plainItem)
+      } catch (e) {
+        // 复制失败时取消视觉反馈
+        justCopied.value = false
+        return
+      }
+
+      // 500ms 后取消高亮（与窗口隐藏时间同步）
+      setTimeout(() => {
+        justCopied.value = false
+      }, 500)
     }
 
     function formatTime(dateStr) {
@@ -99,7 +117,7 @@ export default {
       loadImage()
     })
 
-    return { imageSrc, displayText, handleCopy, formatTime }
+    return { imageSrc, displayText, justCopied, handleCopy, formatTime }
   }
 }
 </script>
