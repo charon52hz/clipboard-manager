@@ -1,0 +1,18 @@
+{
+  "identifier": "default",
+  "description": "允许前端访问所有需要的 Tauri API",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:window:allow-is-visible",
+    "global-shortcut:default"
+  ]
+}

@@ -80,9 +80,18 @@ export default {
     let changeHandler = null
 
     async function loadHistory() {
+      // 等待 clipboardAPI 就绪
+      if (!window.clipboardAPI) {
+        await new Promise(resolve => {
+          const check = setInterval(() => {
+            if (window.clipboardAPI) { clearInterval(check); resolve() }
+          }, 100)
+          setTimeout(() => { clearInterval(check); resolve() }, 5000)
+        })
+      }
+      if (!window.clipboardAPI) return
       try {
         if (searchQuery.value.trim()) {
-          // 前端过滤（MVP 简单实现）
           const all = await window.clipboardAPI.getHistory(200)
           const q = searchQuery.value.toLowerCase()
           items.value = all.filter(item =>
@@ -93,7 +102,7 @@ export default {
           items.value = await window.clipboardAPI.getHistory(100)
         }
       } catch (e) {
-        console.error('Failed to load history:', e)
+        // 静默处理加载失败
       }
     }
 
@@ -126,10 +135,22 @@ export default {
       window.clipboardAPI.quitApp()
     }
 
+    function registerListener() {
+      if (window.clipboardAPI) {
+        changeHandler = () => loadHistory()
+        window.clipboardAPI.onChanged(changeHandler)
+      }
+    }
+
     onMounted(() => {
       loadHistory()
-      changeHandler = () => loadHistory()
-      window.clipboardAPI.onChanged(changeHandler)
+      const check = setInterval(() => {
+        if (window.clipboardAPI) {
+          clearInterval(check)
+          registerListener()
+        }
+      }, 100)
+      setTimeout(() => clearInterval(check), 5000)
     })
 
     onUnmounted(() => {
