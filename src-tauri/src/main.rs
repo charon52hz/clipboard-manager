@@ -168,8 +168,8 @@ fn start_monitor(app: AppHandle, db: Arc<Mutex<Connection>>, image_dir: PathBuf)
                                 continue;
                             }
                         }
-                        let preview = if text.len() > 200 { &text[..200] } else { &text };
-                        db_add(&conn, "text", Some(&text), None, preview);
+                        let preview: String = text.chars().take(200).collect();
+                        db_add(&conn, "text", Some(&text), None, &preview);
                     }
                     app.emit("clipboard-changed", ()).ok();
                 }
